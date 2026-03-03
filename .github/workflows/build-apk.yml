@@ -31,20 +31,19 @@ jobs:
       - name: Create signing keystore
         run: |
           keytool -genkey -v \
-            -keystore my-release-key.keystore \
+            -keystore android/app/my-release-key.keystore \
             -alias lgremote \
             -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=LG Remote,O=LG Remote,C=LV" \
             -storepass lgremote2024 \
             -keypass lgremote2024 \
             -noprompt
-          cp my-release-key.keystore android/app/
 
       - name: Build release APK (with JS bundled inside)
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=app/my-release-key.keystore \
+            -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/android/app/my-release-key.keystore \
             -Pandroid.injected.signing.store.password=lgremote2024 \
             -Pandroid.injected.signing.key.alias=lgremote \
             -Pandroid.injected.signing.key.password=lgremote2024 \
