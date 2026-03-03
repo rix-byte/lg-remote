@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>LG Remote</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    background: #0f0f23;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px 40px;
+    overflow-x: hidden;
+  }
+
+  h1 { font-size: 24px; font-weight: 700; letter-spacing: 0.5px; margin-bottom: 6px; }
+
+  #status {
+    font-size: 13px;
+    color: #888;
+    margin-bottom: 16px;
+    text-align: center;
+    min-height: 18px;
+  }
+
+  /* ── Connect button ── */
+  #connectBtn {
+    background: #e94560;
+    color: #fff;
+    border: none;
+    border-radius: 24px;
+    padding: 12px 32px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    margin-bottom: 28px;
+    transition: opacity .15s;
+  }
+  #connectBtn:active { opacity: .75; }
+
+  /* ── Remote panel ── */
+  #remote {
+    display: none;
+    background: #1a1a3e;
+    border-radius: 28px;
+    padding: 24px 20px;
+    width: min(280px, 100%);
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+  }
+  #remote.visible { display: flex; }
+
+  /* generic button */
+  .btn {
+    background: #1e1e4f;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    user-select: none;
+    transition: background .1s, transform .08s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: manipulation;
+  }
+  .btn:active { background: #2e2e7f; transform: scale(0.93); }
+
+  /* ── Power ── */
+  #btnPower {
+    background: #cc2200;
+    width: 60px; height: 60px;
+    border-radius: 50%;
+    font-size: 13px;
+    margin-bottom: 20px;
+  }
+  #btnPower:active { background: #aa1800; }
+
+  /* ── Vol / Ch row ── */
+  .vc-row {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    margin-bottom: 20px;
+    width: 100%;
+  }
+  .vc-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .vc-label {
+    font-size: 10px;
+    color: #999;
+    letter-spacing: 1px;
+    margin-bottom: 2px;
+  }
+  .vc-col .btn { width: 80px; height: 44px; }
+  .btn-accent { background: #e94560 !important; }
+  .btn-accent:active { background: #c73450 !important; }
+
+  .vc-divider {
+    width: 1px;
+    background: #333366;
+    margin: 0 8px;
+    align-self: stretch;
+  }
+
+  /* ── Divider ── */
+  .h-divider {
+    width: 100%;
+    height: 1px;
+    background: #333366;
+    margin-bottom: 20px;
+  }
+
+  /* ── D-Pad ── */
+  .dpad {
+    display: grid;
+    grid-template-columns: repeat(3, 68px);
+    grid-template-rows: repeat(3, 68px);
+    gap: 4px;
+    margin-bottom: 20px;
+  }
+  .dpad .btn { width: 68px; height: 68px; border-radius: 50%; font-size: 20px; }
+  .dpad .empty { }
+  #btnOk { background: #e94560 !important; font-size: 16px; font-weight: 900; }
+  #btnOk:active { background: #c73450 !important; }
+
+  /* ── Bottom row ── */
+  .sys-row {
+    display: flex;
+    gap: 12px;
+    width: 100%;
+  }
+  .sys-row .btn { flex: 1; height: 48px; border-radius: 12px; font-size: 13px; }
+
+  /* ── IP Modal ── */
+  #modal-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.75);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+  #modal-overlay.visible { display: flex; }
+  #modal-box {
+    background: #1e1e3f;
+    border-radius: 16px;
+    padding: 24px;
+    width: min(300px, calc(100vw - 32px));
+  }
+  #modal-box h2 { font-size: 18px; margin-bottom: 8px; }
+  #modal-box p { font-size: 12px; color: #aaa; margin-bottom: 16px; line-height: 1.6; }
+  #ipInput {
+    width: 100%;
+    background: #0f0f23;
+    border: 1px solid #333366;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 16px;
+    padding: 12px;
+    margin-bottom: 16px;
+    outline: none;
+  }
+  .modal-btns { display: flex; justify-content: flex-end; gap: 8px; }
+  #cancelBtn {
+    background: none; border: none; color: #888;
+    font-size: 14px; cursor: pointer; padding: 10px 14px;
+  }
+  #okBtn {
+    background: #e94560; border: none; color: #fff; font-weight: 700;
+    border-radius: 8px; font-size: 14px; cursor: pointer; padding: 10px 20px;
+  }
+  #okBtn:active { background: #c73450; }
+
+  /* ── Add-to-homescreen tip ── */
+  #tip {
+    margin-top: 20px;
+    font-size: 11px;
+    color: #555;
+    text-align: center;
+    max-width: 260px;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+
+<h1>LG TV Remote</h1>
+<div id="status">Tap below to connect</div>
+
+<button id="connectBtn" onclick="openModal()">Set TV IP Address</button>
+
+<!-- Remote panel -->
+<div id="remote">
+
+  <button class="btn" id="btnPower" onclick="confirmPower()">OFF</button>
+
+  <!-- Volume & Channel -->
+  <div class="vc-row">
+    <div class="vc-col">
+      <span class="vc-label">VOLUME</span>
+      <button class="btn" onclick="sendBtn('VOLUMEUP')">VOL +</button>
+      <button class="btn btn-accent" onclick="sendBtn('MUTE')">MUTE</button>
+      <button class="btn" onclick="sendBtn('VOLUMEDOWN')">VOL −</button>
+    </div>
+    <div class="vc-divider"></div>
+    <div class="vc-col">
+      <span class="vc-label">CHANNEL</span>
+      <button class="btn" onclick="sendBtn('CHANNELUP')">CH +</button>
+      <div style="height:52px"></div>
+      <button class="btn" onclick="sendBtn('CHANNELDOWN')">CH −</button>
+    </div>
+  </div>
+
+  <div class="h-divider"></div>
+
+  <!-- D-Pad -->
+  <div class="dpad">
+    <div class="empty"></div>
+    <button class="btn" onclick="sendBtn('UP')">▲</button>
+    <div class="empty"></div>
+
+    <button class="btn" onclick="sendBtn('LEFT')">◀</button>
+    <button class="btn" id="btnOk" onclick="sendBtn('ENTER')">OK</button>
+    <button class="btn" onclick="sendBtn('RIGHT')">▶</button>
+
+    <div class="empty"></div>
+    <button class="btn" onclick="sendBtn('DOWN')">▼</button>
+    <div class="empty"></div>
+  </div>
+
+  <div class="h-divider"></div>
+
+  <!-- Back & Home -->
+  <div class="sys-row">
+    <button class="btn" onclick="sendBtn('BACK')">BACK</button>
+    <button class="btn" onclick="sendBtn('HOME')">HOME</button>
+  </div>
+
+</div><!-- /remote -->
+
+<p id="tip">Tip: In Chrome tap ⋮ → "Add to Home screen" to use this like an app.</p>
+
+<!-- IP Modal -->
+<div id="modal-overlay">
+  <div id="modal-box">
+    <h2>TV IP Address</h2>
+    <p>On your LG TV:<br>
+      <strong>Settings → Network → Wi-Fi Connection → Advanced Wi-Fi Settings</strong><br>
+      Look for the IP Address (e.g. 192.168.1.105)</p>
+    <input id="ipInput" type="text" placeholder="192.168.1.105" inputmode="decimal">
+    <div class="modal-btns">
+      <button id="cancelBtn" onclick="closeModal()">Cancel</button>
+      <button id="okBtn" onclick="doConnect()">Connect</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+let mainWs   = null;
+let inputWs  = null;
+let tvIp     = localStorage.getItem('tvIp') || '';
+let clientKey = localStorage.getItem('clientKey') || null;
+let msgId    = 1;
+
+// ── UI helpers ───────────────────────────────────────────────────────────────
+function setStatus(txt) {
+  document.getElementById('status').textContent = txt;
+}
+function showRemote(show) {
+  document.getElementById('remote').classList.toggle('visible', show);
+}
+function openModal() {
+  document.getElementById('ipInput').value = tvIp;
+  document.getElementById('modal-overlay').classList.add('visible');
+  setTimeout(() => document.getElementById('ipInput').focus(), 100);
+}
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('visible');
+}
+document.getElementById('ipInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doConnect();
+});
+
+// ── Connect ───────────────────────────────────────────────────────────────────
+function doConnect() {
+  const ip = document.getElementById('ipInput').value.trim();
+  if (!ip) return;
+  tvIp = ip;
+  localStorage.setItem('tvIp', ip);
+  document.getElementById('connectBtn').textContent = 'Change TV IP';
+  closeModal();
+  connect(ip);
+}
+
+function connect(ip) {
+  if (mainWs) { try { mainWs.close(); } catch(e){} }
+  if (inputWs){ try { inputWs.close(); } catch(e){} }
+  mainWs = null; inputWs = null;
+  showRemote(false);
+  setStatus('Connecting to ' + ip + '…');
+
+  mainWs = new WebSocket('ws://' + ip + ':3000');
+
+  mainWs.onopen = () => register();
+
+  mainWs.onmessage = (e) => {
+    try { handleMessage(JSON.parse(e.data)); } catch(err) {}
+  };
+
+  mainWs.onerror = () => {
+    setStatus('Could not reach TV. Check IP and make sure TV is on.');
+    showRemote(false);
+  };
+
+  mainWs.onclose = () => {
+    if (document.getElementById('remote').classList.contains('visible')) {
+      setStatus('Disconnected');
+      showRemote(false);
+    }
+  };
+}
+
+// ── LG WebOS protocol ────────────────────────────────────────────────────────
+function register() {
+  const payload = {
+    forcePairing: false,
+    pairingType:  'PROMPT',
+    manifest: {
+      manifestVersion: 1,
+      permissions: [
+        'CONTROL_AUDIO','CONTROL_INPUT_JOYSTICK','CONTROL_POWER',
+        'READ_CURRENT_CHANNEL','CONTROL_INPUT_MEDIA_PLAYBACK',
+        'CONTROL_MOUSE_AND_KEYBOARD','LAUNCH','APP_TO_APP'
+      ]
+    }
+  };
+  if (clientKey) payload['client-key'] = clientKey;
+  sendMain({ type:'register', id:'register_0', payload });
+}
+
+function handleMessage(json) {
+  switch (json.type) {
+    case 'registered': {
+      const key = json.payload && json.payload['client-key'];
+      if (key) { clientKey = key; localStorage.setItem('clientKey', key); }
+      setStatus('Connected  •  ' + tvIp);
+      showRemote(true);
+      // Request input socket for navigation buttons
+      sendMain({ type:'request', id:'get_input',
+        uri:'ssap://com.webos.service.networkinput/getPointerInputSocket' });
+      break;
+    }
+    case 'prompt':
+      setStatus('Accept the connection on your TV screen…');
+      break;
+    case 'response': {
+      const path = json.payload && json.payload.socketPath;
+      if (path) connectInput(path);
+      break;
+    }
+    case 'error':
+      if (json.id === 'register_0')
+        setStatus('Pairing rejected. Please try again.');
+      break;
+  }
+}
+
+function connectInput(path) {
+  inputWs = new WebSocket('ws://' + tvIp + ':3001' + path);
+  inputWs.onerror = () => {}; // silent — nav just won't work if this fails
+}
+
+function sendMain(obj) {
+  if (mainWs && mainWs.readyState === WebSocket.OPEN)
+    mainWs.send(JSON.stringify(obj));
+}
+
+// ── Button commands ───────────────────────────────────────────────────────────
+function sendBtn(name) {
+  if (inputWs && inputWs.readyState === WebSocket.OPEN) {
+    inputWs.send(JSON.stringify({ type:'button', name }));
+  } else {
+    // Fallback via main socket for some keys
+    if (name === 'VOLUMEUP')   sendMain({ type:'request', id:'cmd_'+(msgId++), uri:'ssap://audio/volumeUp' });
+    else if (name === 'VOLUMEDOWN') sendMain({ type:'request', id:'cmd_'+(msgId++), uri:'ssap://audio/volumeDown' });
+    else if (name === 'CHANNELUP')  sendMain({ type:'request', id:'cmd_'+(msgId++), uri:'ssap://tv/channelUp' });
+    else if (name === 'CHANNELDOWN')sendMain({ type:'request', id:'cmd_'+(msgId++), uri:'ssap://tv/channelDown' });
+    else if (name === 'MUTE')       sendMain({ type:'request', id:'cmd_'+(msgId++), uri:'ssap://audio/setMute', payload:{mute:true} });
+  }
+}
+
+function confirmPower() {
+  if (confirm('Turn off the TV?'))
+    sendMain({ type:'request', id:'cmd_'+(msgId++), uri:'ssap://system/turnOff' });
+}
+
+// ── Auto-connect on load ──────────────────────────────────────────────────────
+if (tvIp) {
+  document.getElementById('connectBtn').textContent = 'Change TV IP';
+  connect(tvIp);
+}
+</script>
+</body>
+</html>

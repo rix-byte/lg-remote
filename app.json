@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "LG Remote",
+    "slug": "lg-remote",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "android": {
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_WIFI_STATE"
+      ],
+      "package": "com.lgremote.app"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "6c8349fb-bb1b-4e45-8c67-f2ceee7d6b45"
+      }
+    }
+  }
+}
