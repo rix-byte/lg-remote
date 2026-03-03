@@ -2,9 +2,11 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
   StyleSheet, View, Text, TouchableOpacity, TextInput,
   Alert, Modal, ScrollView, StatusBar, ViewStyle, TextStyle,
+  ActivityIndicator,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar as ExpoStatusBar } from 'expo-status-bar';
+import * as Network from 'expo-network';
 
 // ─── Colours ──────────────────────────────────────────────────────────────────
 const C = {
@@ -16,6 +18,7 @@ const C = {
   white:   '#ffffff',
   grey:    '#888888',
   divider: '#333366',
+  green:   '#2ecc71',
 };
 
 // ─── LG WebOS TV client ───────────────────────────────────────────────────────
@@ -137,6 +140,12 @@ export default function App() {
   const [ipInput,     setIpInput]     = useState('');
   const [savedIp,     setSavedIp]     = useState('');
 
+  // Discovery state
+  const [scanning,     setScanning]     = useState(false);
+  const [scanProgress, setScanProgress] = useState(0);
+  const [foundTVs,     setFoundTVs]     = useState<string[]>([]);
+  const scanCancelRef = useRef(false);
+
   const clientRef    = useRef<LGTVClient | null>(null);
   const savedKeyRef  = useRef<string | null>(null);
 
@@ -178,12 +187,108 @@ export default function App() {
     AsyncStorage.setItem('tv_ip', ip);
     setSavedIp(ip);
     setShowModal(false);
+    setScanning(false);
     connectToTV(ip);
+  };
+
+  const handleSelectTV = (ip: string) => {
+    AsyncStorage.setItem('tv_ip', ip);
+    setSavedIp(ip);
+    setShowModal(false);
+    setScanning(false);
+    connectToTV(ip);
+  };
+
+  // ── Network scan ──────────────────────────────────────────────────────────
+  const scanForTVs = async () => {
+    setFoundTVs([]);
+    setScanProgress(0);
+    scanCancelRef.current = false;
+
+    let deviceIp: string;
+    try {
+      deviceIp = await Network.getIpAddressAsync();
+    } catch {
+      Alert.alert('Could not get your phone\'s IP address.', 'Make sure WiFi is on.');
+      return;
+    }
+
+    const parts = deviceIp.split('.');
+    if (parts.length !== 4) {
+      Alert.alert('Unexpected IP format: ' + deviceIp);
+      return;
+    }
+    const subnet = `${parts[0]}.${parts[1]}.${parts[2]}`;
+
+    setScanning(true);
+
+    const found: string[] = [];
+    const total = 254;
+    let done = 0;
+
+    const testIP = (i: number): Promise<void> =>
+      new Promise((resolve) => {
+        if (scanCancelRef.current) { done++; resolve(); return; }
+        const ip = `${subnet}.${i}`;
+        const ws = new WebSocket(`ws://${ip}:3000`);
+        let settled = false;
+
+        const finish = (isTV: boolean) => {
+          if (settled) return;
+          settled = true;
+          done++;
+          setScanProgress(Math.round((done / total) * 100));
+          if (isTV) {
+            found.push(ip);
+            setFoundTVs(prev => [...prev, ip]);
+          }
+          resolve();
+        };
+
+        const timer = setTimeout(() => {
+          try { ws.close(); } catch {}
+          finish(false);
+        }, 800);
+
+        ws.onopen = () => {
+          clearTimeout(timer);
+          try { ws.close(); } catch {}
+          finish(true);
+        };
+        ws.onerror = () => {
+          clearTimeout(timer);
+          finish(false);
+        };
+      });
+
+    const BATCH = 25;
+    for (let i = 1; i <= 254; i += BATCH) {
+      if (scanCancelRef.current) break;
+      const indices = Array.from(
+        { length: Math.min(BATCH, 255 - i) },
+        (_, k) => i + k
+      );
+      await Promise.all(indices.map(testIP));
+    }
+
+    setScanning(false);
+
+    if (!scanCancelRef.current && found.length === 0) {
+      Alert.alert(
+        'No TVs found',
+        'Make sure your LG TV is on and connected to the same WiFi network, then try again.'
+      );
+    }
+  };
+
+  const stopScan = () => {
+    scanCancelRef.current = true;
+    setScanning(false);
   };
 
   const tv = clientRef.current;
 
-  // ── Helper: render a button ──
+  // ── Helper: render a remote button ────────────────────────────────────────
   const Btn = ({
     label, onPress, style, textStyle,
   }: {
@@ -210,10 +315,10 @@ export default function App() {
 
         <TouchableOpacity
           style={s.connectBtn}
-          onPress={() => { setIpInput(savedIp); setShowModal(true); }}
+          onPress={() => { setIpInput(savedIp); setFoundTVs([]); setScanning(false); setShowModal(true); }}
           activeOpacity={0.8}
         >
-          <Text style={s.connectBtnTxt}>{savedIp ? 'Change TV IP' : 'Set TV IP Address'}</Text>
+          <Text style={s.connectBtnTxt}>{connected ? 'Change TV' : savedIp ? 'Reconnect / Change TV' : 'Connect to TV'}</Text>
         </TouchableOpacity>
 
         {/* ═══ Remote Panel ═══ */}
@@ -255,19 +360,16 @@ export default function App() {
 
             {/* D-Pad */}
             <View style={s.dpad}>
-              {/* Row 1 */}
               <View style={s.drow}>
                 <View style={s.dspace} />
                 <Btn label="▲" onPress={() => tv?.navUp()}  style={s.dBtn} />
                 <View style={s.dspace} />
               </View>
-              {/* Row 2 */}
               <View style={s.drow}>
                 <Btn label="◀" onPress={() => tv?.navLeft()}  style={s.dBtn} />
                 <Btn label="OK" onPress={() => tv?.ok()}      style={[s.dBtn, s.okBtn]} />
                 <Btn label="▶" onPress={() => tv?.navRight()} style={s.dBtn} />
               </View>
-              {/* Row 3 */}
               <View style={s.drow}>
                 <View style={s.dspace} />
                 <Btn label="▼" onPress={() => tv?.navDown()} style={s.dBtn} />
@@ -288,14 +390,62 @@ export default function App() {
         )}
       </ScrollView>
 
-      {/* IP modal */}
-      <Modal visible={showModal} transparent animationType="fade" onRequestClose={() => setShowModal(false)}>
+      {/* ── Connect modal ───────────────────────────────────────────────────── */}
+      <Modal visible={showModal} transparent animationType="fade" onRequestClose={() => { stopScan(); setShowModal(false); }}>
         <View style={s.overlay}>
           <View style={s.modalBox}>
-            <Text style={s.modalTitle}>TV IP Address</Text>
+            <Text style={s.modalTitle}>Connect to LG TV</Text>
+
+            {/* ─ Auto-discover section ─ */}
+            {!scanning && foundTVs.length === 0 && (
+              <TouchableOpacity style={s.searchBtn} onPress={scanForTVs} activeOpacity={0.8}>
+                <Text style={s.searchBtnTxt}>Search for TV automatically</Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Scanning progress */}
+            {scanning && (
+              <View style={s.scanBox}>
+                <ActivityIndicator color={C.accent} size="small" />
+                <Text style={s.scanText}>Scanning network… {scanProgress}%</Text>
+                <View style={s.progressBar}>
+                  <View style={[s.progressFill, { width: `${scanProgress}%` as any }]} />
+                </View>
+                {foundTVs.length > 0 && (
+                  <Text style={s.foundWhileScanning}>{foundTVs.length} TV{foundTVs.length > 1 ? 's' : ''} found so far</Text>
+                )}
+                <TouchableOpacity onPress={stopScan} style={s.stopBtn}>
+                  <Text style={{ color: C.grey, fontSize: 12 }}>Stop</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Found TV list */}
+            {foundTVs.length > 0 && (
+              <View style={s.foundList}>
+                <Text style={s.foundLabel}>Found TV{foundTVs.length > 1 ? 's' : ''} — tap to connect:</Text>
+                {foundTVs.map(ip => (
+                  <TouchableOpacity key={ip} style={s.foundItem} onPress={() => handleSelectTV(ip)} activeOpacity={0.8}>
+                    <Text style={s.foundItemTxt}>📺  {ip}</Text>
+                  </TouchableOpacity>
+                ))}
+                {!scanning && (
+                  <TouchableOpacity onPress={scanForTVs} style={s.rescanBtn}>
+                    <Text style={{ color: C.grey, fontSize: 12 }}>Search again</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+
+            {/* Divider */}
+            <View style={s.orRow}>
+              <View style={s.orLine} />
+              <Text style={s.orTxt}>or enter IP manually</Text>
+              <View style={s.orLine} />
+            </View>
+
             <Text style={s.modalHint}>
-              On your TV go to:{'\n'}
-              Settings → Network → Wi-Fi Connection → Advanced Wi-Fi Settings
+              TV → Settings → Network → Wi-Fi → Advanced Wi-Fi Settings
             </Text>
             <TextInput
               style={s.input}
@@ -304,11 +454,10 @@ export default function App() {
               placeholder="e.g. 192.168.1.105"
               placeholderTextColor="#555"
               keyboardType="default"
-              autoFocus
               onSubmitEditing={handleConnect}
             />
             <View style={s.modalRow}>
-              <TouchableOpacity onPress={() => setShowModal(false)} style={s.cancelBtn}>
+              <TouchableOpacity onPress={() => { stopScan(); setShowModal(false); }} style={s.cancelBtn}>
                 <Text style={{ color: C.grey, fontSize: 14 }}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={s.modalConnectBtn} onPress={handleConnect} activeOpacity={0.8}>
@@ -356,11 +505,35 @@ const s = StyleSheet.create({
 
   // Modal
   overlay:    { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center' },
-  modalBox:   { backgroundColor: '#1e1e3f', borderRadius: 16, padding: 24, width: 300 },
-  modalTitle: { color: C.white, fontSize: 18, fontWeight: 'bold', marginBottom: 8 },
-  modalHint:  { color: '#aaa', fontSize: 12, marginBottom: 16, lineHeight: 18 },
+  modalBox:   { backgroundColor: '#1e1e3f', borderRadius: 16, padding: 24, width: 310 },
+  modalTitle: { color: C.white, fontSize: 18, fontWeight: 'bold', marginBottom: 14 },
+  modalHint:  { color: '#aaa', fontSize: 11, marginBottom: 10, lineHeight: 16 },
   input:      { backgroundColor: C.bg, color: C.white, borderRadius: 8, padding: 12, fontSize: 16, marginBottom: 16, borderWidth: 1, borderColor: C.divider },
   modalRow:   { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center' },
   cancelBtn:  { paddingHorizontal: 16, paddingVertical: 10, marginRight: 8 },
   modalConnectBtn: { backgroundColor: C.accent, borderRadius: 8, paddingHorizontal: 20, paddingVertical: 10 },
+
+  // Search button
+  searchBtn:    { backgroundColor: C.green, borderRadius: 10, paddingVertical: 12, alignItems: 'center', marginBottom: 14 },
+  searchBtnTxt: { color: C.white, fontWeight: 'bold', fontSize: 14 },
+
+  // Scanning
+  scanBox:   { backgroundColor: C.bg, borderRadius: 10, padding: 14, marginBottom: 14, alignItems: 'center' },
+  scanText:  { color: C.grey, fontSize: 13, marginTop: 8, marginBottom: 8 },
+  progressBar:  { width: '100%', height: 4, backgroundColor: C.divider, borderRadius: 2, overflow: 'hidden', marginBottom: 6 },
+  progressFill: { height: 4, backgroundColor: C.accent, borderRadius: 2 },
+  foundWhileScanning: { color: C.green, fontSize: 12, marginBottom: 4 },
+  stopBtn:   { marginTop: 4 },
+
+  // Found TVs
+  foundList:    { backgroundColor: C.bg, borderRadius: 10, padding: 10, marginBottom: 14 },
+  foundLabel:   { color: '#aaa', fontSize: 11, marginBottom: 8 },
+  foundItem:    { backgroundColor: C.accent, borderRadius: 8, paddingVertical: 12, paddingHorizontal: 16, marginBottom: 6 },
+  foundItemTxt: { color: C.white, fontWeight: 'bold', fontSize: 15 },
+  rescanBtn:    { alignItems: 'center', paddingTop: 6 },
+
+  // Or divider
+  orRow:  { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  orLine: { flex: 1, height: 1, backgroundColor: C.divider },
+  orTxt:  { color: '#555', fontSize: 11, marginHorizontal: 10 },
 });
