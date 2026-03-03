@@ -18,7 +18,8 @@
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.ACCESS_WIFI_STATE"
       ],
-      "package": "com.lgremote.app"
+      "package": "com.lgremote.app",
+      "usesCleartextTraffic": true
     },
     "extra": {
       "eas": {
