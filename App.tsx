@@ -111,7 +111,6 @@ class LGTVClient {
     this.sendMain({ type: 'request', id: `cmd_${this.msgId++}`, uri });
   }
 
-  // ── Public buttons ──
   volumeUp()    { this.btn('VOLUMEUP');   }
   volumeDown()  { this.btn('VOLUMEDOWN'); }
   mute()        { this.btn('MUTE');       }
@@ -140,22 +139,18 @@ export default function App() {
   const [ipInput,     setIpInput]     = useState('');
   const [savedIp,     setSavedIp]     = useState('');
 
-  // Discovery state
   const [scanning,     setScanning]     = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
+  const [scanNote,     setScanNote]     = useState('');
   const [foundTVs,     setFoundTVs]     = useState<string[]>([]);
   const scanCancelRef = useRef(false);
 
   const clientRef    = useRef<LGTVClient | null>(null);
   const savedKeyRef  = useRef<string | null>(null);
 
-  // Load saved IP on startup
   useEffect(() => {
     AsyncStorage.getItem('tv_ip').then(ip => {
-      if (ip) {
-        setSavedIp(ip);
-        connectToTV(ip);
-      }
+      if (ip) { setSavedIp(ip); connectToTV(ip); }
     });
   }, []);
 
@@ -199,84 +194,111 @@ export default function App() {
     connectToTV(ip);
   };
 
-  // ── Network scan ──────────────────────────────────────────────────────────
+  // ── Network scan using fetch (more reliable than WebSocket on Android) ──────
   const scanForTVs = async () => {
     setFoundTVs([]);
     setScanProgress(0);
+    setScanNote('Detecting your network…');
     scanCancelRef.current = false;
-
-    let deviceIp: string;
-    try {
-      deviceIp = await Network.getIpAddressAsync();
-    } catch {
-      Alert.alert('Could not get your phone\'s IP address.', 'Make sure WiFi is on.');
-      return;
-    }
-
-    const parts = deviceIp.split('.');
-    if (parts.length !== 4) {
-      Alert.alert('Unexpected IP format: ' + deviceIp);
-      return;
-    }
-    const subnet = `${parts[0]}.${parts[1]}.${parts[2]}`;
-
     setScanning(true);
 
+    // Try to get phone's own IP to know which subnet to scan
+    let phoneIp = '';
+    try {
+      phoneIp = (await Network.getIpAddressAsync()) ?? '';
+    } catch {}
+
+    // Build subnets to scan: detected subnet first, then common fallbacks
+    const subnets: string[] = [];
+    if (phoneIp && phoneIp !== '0.0.0.0' && phoneIp !== '127.0.0.1') {
+      const parts = phoneIp.split('.');
+      if (parts.length === 4) {
+        subnets.push(`${parts[0]}.${parts[1]}.${parts[2]}`);
+      }
+    }
+    for (const common of ['192.168.1', '192.168.0', '10.0.0']) {
+      if (!subnets.includes(common)) subnets.push(common);
+    }
+
+    const noteBase = phoneIp && phoneIp !== '0.0.0.0'
+      ? `Phone IP: ${phoneIp}`
+      : 'Scanning common subnets';
+    setScanNote(noteBase);
+
     const found: string[] = [];
-    const total = 254;
+    const total = subnets.length * 254;
     let done = 0;
 
-    const testIP = (i: number): Promise<void> =>
+    // Probe a single IP using fetch — if port 3000 responds at all, it's a TV candidate
+    const probe = (ip: string): Promise<void> =>
       new Promise((resolve) => {
         if (scanCancelRef.current) { done++; resolve(); return; }
-        const ip = `${subnet}.${i}`;
-        const ws = new WebSocket(`ws://${ip}:3000`);
-        let settled = false;
 
-        const finish = (isTV: boolean) => {
-          if (settled) return;
-          settled = true;
+        const controller = new AbortController();
+        const timer = setTimeout(() => {
+          controller.abort();
           done++;
           setScanProgress(Math.round((done / total) * 100));
-          if (isTV) {
-            found.push(ip);
-            setFoundTVs(prev => [...prev, ip]);
-          }
           resolve();
-        };
+        }, 1200);
 
-        const timer = setTimeout(() => {
-          try { ws.close(); } catch {}
-          finish(false);
-        }, 800);
-
-        ws.onopen = () => {
-          clearTimeout(timer);
-          try { ws.close(); } catch {}
-          finish(true);
-        };
-        ws.onerror = () => {
-          clearTimeout(timer);
-          finish(false);
-        };
+        fetch(`http://${ip}:3000`, { signal: controller.signal })
+          .then(() => {
+            // HTTP response received (any status) → port is open → TV
+            clearTimeout(timer);
+            if (!found.includes(ip)) {
+              found.push(ip);
+              setFoundTVs(prev => [...prev, ip]);
+            }
+            done++;
+            setScanProgress(Math.round((done / total) * 100));
+            resolve();
+          })
+          .catch((e: any) => {
+            clearTimeout(timer);
+            const msg: string = e?.message ?? '';
+            // If it's NOT a plain network/connection error, some kind of response came back
+            if (
+              e?.name !== 'AbortError' &&
+              !msg.includes('Network request failed') &&
+              !msg.includes('Failed to fetch') &&
+              !msg.includes('Connection refused')
+            ) {
+              if (!found.includes(ip)) {
+                found.push(ip);
+                setFoundTVs(prev => [...prev, ip]);
+              }
+            }
+            done++;
+            setScanProgress(Math.round((done / total) * 100));
+            resolve();
+          });
       });
 
-    const BATCH = 25;
-    for (let i = 1; i <= 254; i += BATCH) {
+    const BATCH = 12;
+    for (const subnet of subnets) {
       if (scanCancelRef.current) break;
-      const indices = Array.from(
-        { length: Math.min(BATCH, 255 - i) },
-        (_, k) => i + k
-      );
-      await Promise.all(indices.map(testIP));
+      setScanNote(`${noteBase} — scanning ${subnet}.x`);
+      for (let i = 1; i <= 254; i += BATCH) {
+        if (scanCancelRef.current) break;
+        const batch = Array.from(
+          { length: Math.min(BATCH, 255 - i) },
+          (_, k) => `${subnet}.${i + k}`
+        );
+        await Promise.all(batch.map(probe));
+      }
     }
 
     setScanning(false);
+    setScanNote('');
 
     if (!scanCancelRef.current && found.length === 0) {
       Alert.alert(
         'No TVs found',
-        'Make sure your LG TV is on and connected to the same WiFi network, then try again.'
+        (phoneIp && phoneIp !== '0.0.0.0'
+          ? `Your phone IP: ${phoneIp}\nScanned: ${subnets.join(', ')}\n\n`
+          : '') +
+        'Make sure:\n• LG TV is turned ON (not just standby)\n• Phone WiFi is on the same network as the TV\n\nYou can also enter the TV IP manually below.'
       );
     }
   };
@@ -284,11 +306,11 @@ export default function App() {
   const stopScan = () => {
     scanCancelRef.current = true;
     setScanning(false);
+    setScanNote('');
   };
 
   const tv = clientRef.current;
 
-  // ── Helper: render a remote button ────────────────────────────────────────
   const Btn = ({
     label, onPress, style, textStyle,
   }: {
@@ -308,24 +330,27 @@ export default function App() {
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
 
       <ScrollView contentContainerStyle={s.scroll}>
-
-        {/* Header */}
         <Text style={s.title}>LG TV Remote</Text>
         <Text style={s.status}>{status}</Text>
 
         <TouchableOpacity
           style={s.connectBtn}
-          onPress={() => { setIpInput(savedIp); setFoundTVs([]); setScanning(false); setShowModal(true); }}
+          onPress={() => {
+            setIpInput(savedIp);
+            setFoundTVs([]);
+            setScanning(false);
+            setScanNote('');
+            setShowModal(true);
+          }}
           activeOpacity={0.8}
         >
-          <Text style={s.connectBtnTxt}>{connected ? 'Change TV' : savedIp ? 'Reconnect / Change TV' : 'Connect to TV'}</Text>
+          <Text style={s.connectBtnTxt}>
+            {connected ? 'Change TV' : savedIp ? 'Reconnect / Change TV' : 'Connect to TV'}
+          </Text>
         </TouchableOpacity>
 
-        {/* ═══ Remote Panel ═══ */}
         {connected && (
           <View style={s.remote}>
-
-            {/* Power */}
             <TouchableOpacity
               style={s.powerBtn}
               onPress={() =>
@@ -339,7 +364,6 @@ export default function App() {
               <Text style={[s.btnTxt, { fontSize: 12 }]}>OFF</Text>
             </TouchableOpacity>
 
-            {/* Volume & Channel */}
             <View style={s.row}>
               <View style={s.col}>
                 <Text style={s.colLabel}>VOLUME</Text>
@@ -358,11 +382,10 @@ export default function App() {
 
             <View style={s.hDivider} />
 
-            {/* D-Pad */}
             <View style={s.dpad}>
               <View style={s.drow}>
                 <View style={s.dspace} />
-                <Btn label="▲" onPress={() => tv?.navUp()}  style={s.dBtn} />
+                <Btn label="▲" onPress={() => tv?.navUp()}    style={s.dBtn} />
                 <View style={s.dspace} />
               </View>
               <View style={s.drow}>
@@ -372,47 +395,53 @@ export default function App() {
               </View>
               <View style={s.drow}>
                 <View style={s.dspace} />
-                <Btn label="▼" onPress={() => tv?.navDown()} style={s.dBtn} />
+                <Btn label="▼" onPress={() => tv?.navDown()}  style={s.dBtn} />
                 <View style={s.dspace} />
               </View>
             </View>
 
             <View style={s.hDivider} />
 
-            {/* Back & Home */}
             <View style={[s.row, { marginBottom: 0 }]}>
               <Btn label="BACK" onPress={() => tv?.back()} style={s.sysBtn} />
               <View style={{ width: 12 }} />
               <Btn label="HOME" onPress={() => tv?.home()} style={s.sysBtn} />
             </View>
-
           </View>
         )}
       </ScrollView>
 
-      {/* ── Connect modal ───────────────────────────────────────────────────── */}
-      <Modal visible={showModal} transparent animationType="fade" onRequestClose={() => { stopScan(); setShowModal(false); }}>
+      {/* ── Connect modal ────────────────────────────────────────────────────── */}
+      <Modal
+        visible={showModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { stopScan(); setShowModal(false); }}
+      >
         <View style={s.overlay}>
           <View style={s.modalBox}>
             <Text style={s.modalTitle}>Connect to LG TV</Text>
 
-            {/* ─ Auto-discover section ─ */}
+            {/* Search button (shown when idle and no results yet) */}
             {!scanning && foundTVs.length === 0 && (
               <TouchableOpacity style={s.searchBtn} onPress={scanForTVs} activeOpacity={0.8}>
                 <Text style={s.searchBtnTxt}>Search for TV automatically</Text>
               </TouchableOpacity>
             )}
 
-            {/* Scanning progress */}
+            {/* Scanning in progress */}
             {scanning && (
               <View style={s.scanBox}>
                 <ActivityIndicator color={C.accent} size="small" />
-                <Text style={s.scanText}>Scanning network… {scanProgress}%</Text>
+                <Text style={s.scanProgress}>{scanProgress}%</Text>
                 <View style={s.progressBar}>
                   <View style={[s.progressFill, { width: `${scanProgress}%` as any }]} />
                 </View>
+                {scanNote ? <Text style={s.scanNote}>{scanNote}</Text> : null}
                 {foundTVs.length > 0 && (
-                  <Text style={s.foundWhileScanning}>{foundTVs.length} TV{foundTVs.length > 1 ? 's' : ''} found so far</Text>
+                  <Text style={s.foundWhile}>
+                    {foundTVs.length} TV{foundTVs.length > 1 ? 's' : ''} found so far!
+                  </Text>
                 )}
                 <TouchableOpacity onPress={stopScan} style={s.stopBtn}>
                   <Text style={{ color: C.grey, fontSize: 12 }}>Stop</Text>
@@ -420,13 +449,20 @@ export default function App() {
               </View>
             )}
 
-            {/* Found TV list */}
+            {/* Found TVs list */}
             {foundTVs.length > 0 && (
               <View style={s.foundList}>
-                <Text style={s.foundLabel}>Found TV{foundTVs.length > 1 ? 's' : ''} — tap to connect:</Text>
+                <Text style={s.foundLabel}>
+                  {scanning ? 'Found so far — tap to connect:' : 'Found — tap to connect:'}
+                </Text>
                 {foundTVs.map(ip => (
-                  <TouchableOpacity key={ip} style={s.foundItem} onPress={() => handleSelectTV(ip)} activeOpacity={0.8}>
-                    <Text style={s.foundItemTxt}>📺  {ip}</Text>
+                  <TouchableOpacity
+                    key={ip}
+                    style={s.foundItem}
+                    onPress={() => handleSelectTV(ip)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={s.foundItemTxt}>TV at {ip}</Text>
                   </TouchableOpacity>
                 ))}
                 {!scanning && (
@@ -457,10 +493,17 @@ export default function App() {
               onSubmitEditing={handleConnect}
             />
             <View style={s.modalRow}>
-              <TouchableOpacity onPress={() => { stopScan(); setShowModal(false); }} style={s.cancelBtn}>
+              <TouchableOpacity
+                onPress={() => { stopScan(); setShowModal(false); }}
+                style={s.cancelBtn}
+              >
                 <Text style={{ color: C.grey, fontSize: 14 }}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={s.modalConnectBtn} onPress={handleConnect} activeOpacity={0.8}>
+              <TouchableOpacity
+                style={s.modalConnectBtn}
+                onPress={handleConnect}
+                activeOpacity={0.8}
+              >
                 <Text style={s.btnTxt}>Connect</Text>
               </TouchableOpacity>
             </View>
@@ -473,7 +516,7 @@ export default function App() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
-  root:  { flex: 1, backgroundColor: C.bg },
+  root:   { flex: 1, backgroundColor: C.bg },
   scroll: { alignItems: 'center', paddingVertical: 40, paddingHorizontal: 24 },
 
   title:  { color: C.white, fontSize: 26, fontWeight: 'bold', letterSpacing: 0.5, marginBottom: 6 },
@@ -485,15 +528,15 @@ const s = StyleSheet.create({
   remote:   { backgroundColor: C.panel, borderRadius: 28, padding: 20, width: 280, alignItems: 'center' },
   powerBtn: { backgroundColor: C.power, width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', marginBottom: 20 },
 
-  row:    { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
-  col:    { flex: 1, alignItems: 'center' },
+  row:      { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
+  col:      { flex: 1, alignItems: 'center' },
   colLabel: { color: '#999', fontSize: 10, letterSpacing: 1, marginBottom: 6 },
   vDivider: { width: 1, height: 140, backgroundColor: C.divider, marginHorizontal: 8 },
   hDivider: { width: '100%', height: 1, backgroundColor: C.divider, marginBottom: 20 },
 
-  btn:      { backgroundColor: C.button, borderRadius: 8, width: 80, height: 44, justifyContent: 'center', alignItems: 'center', marginVertical: 2 },
-  btnTxt:   { color: C.white, fontWeight: 'bold', fontSize: 13 },
-  accentBtn:{ backgroundColor: C.accent },
+  btn:       { backgroundColor: C.button, borderRadius: 8, width: 80, height: 44, justifyContent: 'center', alignItems: 'center', marginVertical: 2 },
+  btnTxt:    { color: C.white, fontWeight: 'bold', fontSize: 13 },
+  accentBtn: { backgroundColor: C.accent },
 
   dpad:   { marginBottom: 20 },
   drow:   { flexDirection: 'row' },
@@ -514,21 +557,22 @@ const s = StyleSheet.create({
   modalConnectBtn: { backgroundColor: C.accent, borderRadius: 8, paddingHorizontal: 20, paddingVertical: 10 },
 
   // Search button
-  searchBtn:    { backgroundColor: C.green, borderRadius: 10, paddingVertical: 12, alignItems: 'center', marginBottom: 14 },
+  searchBtn:    { backgroundColor: C.green, borderRadius: 10, paddingVertical: 13, alignItems: 'center', marginBottom: 14 },
   searchBtnTxt: { color: C.white, fontWeight: 'bold', fontSize: 14 },
 
   // Scanning
-  scanBox:   { backgroundColor: C.bg, borderRadius: 10, padding: 14, marginBottom: 14, alignItems: 'center' },
-  scanText:  { color: C.grey, fontSize: 13, marginTop: 8, marginBottom: 8 },
-  progressBar:  { width: '100%', height: 4, backgroundColor: C.divider, borderRadius: 2, overflow: 'hidden', marginBottom: 6 },
+  scanBox:      { backgroundColor: C.bg, borderRadius: 10, padding: 14, marginBottom: 14, alignItems: 'center' },
+  scanProgress: { color: C.white, fontSize: 20, fontWeight: 'bold', marginTop: 8 },
+  progressBar:  { width: '100%', height: 4, backgroundColor: C.divider, borderRadius: 2, overflow: 'hidden', marginTop: 6, marginBottom: 8 },
   progressFill: { height: 4, backgroundColor: C.accent, borderRadius: 2 },
-  foundWhileScanning: { color: C.green, fontSize: 12, marginBottom: 4 },
-  stopBtn:   { marginTop: 4 },
+  scanNote:     { color: C.grey, fontSize: 11, textAlign: 'center', marginBottom: 4 },
+  foundWhile:   { color: C.green, fontSize: 12, marginBottom: 4 },
+  stopBtn:      { marginTop: 6 },
 
   // Found TVs
   foundList:    { backgroundColor: C.bg, borderRadius: 10, padding: 10, marginBottom: 14 },
   foundLabel:   { color: '#aaa', fontSize: 11, marginBottom: 8 },
-  foundItem:    { backgroundColor: C.accent, borderRadius: 8, paddingVertical: 12, paddingHorizontal: 16, marginBottom: 6 },
+  foundItem:    { backgroundColor: C.accent, borderRadius: 8, paddingVertical: 13, paddingHorizontal: 16, marginBottom: 6, alignItems: 'center' },
   foundItemTxt: { color: C.white, fontWeight: 'bold', fontSize: 15 },
   rescanBtn:    { alignItems: 'center', paddingTop: 6 },
 
