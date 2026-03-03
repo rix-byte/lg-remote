@@ -4,7 +4,15 @@
     "slug": "lg-remote",
     "version": "1.0.0",
     "orientation": "portrait",
+    "splash": {
+      "backgroundColor": "#0f0f23",
+      "resizeMode": "contain"
+    },
     "android": {
+      "splash": {
+        "backgroundColor": "#0f0f23",
+        "resizeMode": "contain"
+      },
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.ACCESS_NETWORK_STATE",
