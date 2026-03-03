@@ -9,16 +9,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
@@ -31,16 +28,33 @@ jobs:
         env:
           EXPO_NO_TELEMETRY: 1
 
-      - name: Build APK
+      - name: Create signing keystore
+        run: |
+          keytool -genkey -v \
+            -keystore my-release-key.keystore \
+            -alias lgremote \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=LG Remote,O=LG Remote,C=LV" \
+            -storepass lgremote2024 \
+            -keypass lgremote2024 \
+            -noprompt
+          cp my-release-key.keystore android/app/
+
+      - name: Build release APK (with JS bundled inside)
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=app/my-release-key.keystore \
+            -Pandroid.injected.signing.store.password=lgremote2024 \
+            -Pandroid.injected.signing.key.alias=lgremote \
+            -Pandroid.injected.signing.key.password=lgremote2024 \
+            --no-daemon
         working-directory: android
 
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: LG-Remote-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/release/app-release.apk
           retention-days: 30
           if-no-files-found: error
