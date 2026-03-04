@@ -18,9 +18,18 @@
         "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.ACCESS_WIFI_STATE"
       ],
-      "package": "com.lgremote.app",
-      "usesCleartextTraffic": true
+      "package": "com.lgremote.app"
     },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ],
     "extra": {
       "eas": {
         "projectId": "6c8349fb-bb1b-4e45-8c67-f2ceee7d6b45"
